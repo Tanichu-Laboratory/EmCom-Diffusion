@@ -9,7 +9,7 @@ Graduate School of Informatics, Kyoto University
 
 ## Quick Start: Evaluate Your Own EC Corpus
 
-If you already have an EC corpus from any Referential Game setup, you can run EmCom-Diffusion directly without retraining the game model.
+If you already have an EC corpus from any Referential Game setup, you can apply EmCom-Diffusion without retraining the game model.
 
 **Corpus format** — a JSON file with the following structure:
 
@@ -34,55 +34,58 @@ If you already have an EC corpus from any Referential Game setup, you can run Em
 ```bash
 export COCO_ROOT=/path/to/coco2017
 
-accelerate launch -m diffusion.train \
-    --config configs/setting_b.yaml   # EC embedding + U-Net LoRA
+accelerate launch -m diffusion.train --config configs/diffusion_ec_lora.yaml
 ```
 
-Edit `configs/setting_b.yaml` to set `ec_json` to your corpus path.
+Edit `configs/diffusion_ec_lora.yaml` to point `ec_json` to your corpus file.
 
-**Step 2 — Generate images:**
+**Step 2 — Generate images for each condition:**
 
 ```bash
+EC_JSON=your_corpus.json
+CKPT=checkpoints/emcom_model/step_010000
+
+# Emergent-language condition
 python -m diffusion.inference \
-    --ckpts    checkpoints/your_model/step_010000 \
-    --labels   EL \
-    --n_samples 5000 \
-    --input_type ec \
-    --ec_json  your_corpus.json \
-    --out_img_dir outputs/generated_images
-```
+    --ckpts $CKPT --labels emcom \
+    --n_samples 5000 --input_type ec \
+    --ec_json $EC_JSON --out_img_dir outputs/generated_images
 
-Also generate baselines for validation:
+# Random-token baseline (no image-specific information)
+python -m diffusion.inference \
+    --ckpts $CKPT --labels emcom_random \
+    --n_samples 5000 --input_type random \
+    --ec_json $EC_JSON --out_img_dir outputs/generated_images
 
-```bash
-# Random-token baseline
-python -m diffusion.inference ... --input_type random --labels Random
-
-# Fixed-token baseline
-python -m diffusion.inference ... --input_type fixed  --labels Fixed
+# Fixed-token baseline (same sequence for every image)
+python -m diffusion.inference \
+    --ckpts $CKPT --labels emcom_fixed \
+    --n_samples 5000 --input_type fixed \
+    --ec_json $EC_JSON --out_img_dir outputs/generated_images
 ```
 
 **Step 3 — Compute EmCom-Diffusion scores:**
 
 ```bash
-# CLIP-img (ViT-B/32), DINOv2 ViT-B/14, SigLIP ViT-B/16
-python experiments/exp_b1_multi_encoder.py \
-    --ec_json  your_corpus.json \
-    --gen_dir  outputs/generated_images \
-    --out_csv  outputs/emcomdiffusion_scores.csv \
+# Per-image similarity: CLIP-img (ViT-B/32), DINOv2 ViT-B/14, SigLIP ViT-B/16
+python experiments/eval_similarity.py \
+    --ec_json your_corpus.json \
+    --gen_dir outputs/generated_images \
+    --conditions emcom emcom_random emcom_fixed \
+    --out_csv outputs/emcomdiffusion_scores.csv \
     --n_samples 5000
 
-# CLIP-text and FID
+# CLIP-text similarity and FID
 python experiments/evaluate.py \
     --ec_json    your_corpus.json \
-    --gen_dirs   outputs/generated_images/EL \
-    --rand_dirs  outputs/generated_images/Random \
-    --fixed_dirs outputs/generated_images/Fixed \
-    --labels EL --n_samples 5000 \
+    --gen_dirs   outputs/generated_images/emcom \
+    --rand_dirs  outputs/generated_images/emcom_random \
+    --fixed_dirs outputs/generated_images/emcom_fixed \
+    --labels emcom --n_samples 5000 \
     --out_csv outputs/eval_metrics.csv
 ```
 
-The expected ordering is **Random/Fixed < EL** across all similarity metrics if the emergent language encodes visual content.
+The expected ordering is **emcom_random / emcom_fixed < emcom** across all similarity metrics if the emergent language encodes visual content.
 
 ---
 
@@ -101,40 +104,40 @@ DINOv2 is loaded at runtime via `torch.hub` from `facebookresearch/dinov2`.
 
 ```
 emcom-diffusion/
-├── ec_game/                    # Referential Game training
+├── ec_game/                        # Referential Game
 │   ├── models/
-│   │   ├── emcom.py            # Speaker (cross-attn over DINOv2 patches) + Receiver (BERT)
-│   │   ├── vit.py              # DINOv2 wrapper
-│   │   ├── med.py              # BERT implementation
-│   │   └── blip_utils.py       # create_vit helper
+│   │   ├── emcom.py                # Speaker (cross-attn over DINOv2 patches) + Receiver (BERT)
+│   │   ├── vit.py                  # DINOv2 wrapper
+│   │   ├── med.py                  # BERT implementation
+│   │   └── blip_utils.py           # create_vit helper
 │   ├── configs/
 │   │   ├── config_referential.yaml
 │   │   └── bert_config.json
-│   ├── train.py                # Training script
-│   └── extract_corpus.py       # Extract EC corpus from checkpoint
+│   ├── train.py                    # Training script
+│   └── extract_corpus.py           # Extract EC corpus from checkpoint
 │
-├── diffusion/                  # SD fine-tuning & image generation
-│   ├── train.py                # Fine-tune SD v1.5 with EC tokens (Settings A/B/C)
-│   ├── train_nl.py             # Fine-tune SD v1.5 with NL captions (SD-NL baseline)
-│   ├── inference.py            # Generate images (EC / Random / Fixed / NL)
-│   ├── ec_text_encoder.py      # Custom CLIP text encoder for EC tokens
-│   ├── data.py                 # Dataset classes
+├── diffusion/                      # SD fine-tuning & image generation
+│   ├── train.py                    # Fine-tune SD v1.5 with EC tokens
+│   ├── train_nl.py                 # Fine-tune SD v1.5 with NL captions (SD-NL baseline)
+│   ├── inference.py                # Generate images (EC / Random / Fixed / NL)
+│   ├── ec_text_encoder.py          # Custom CLIP text encoder for EC tokens
+│   ├── data.py
 │   └── utils.py
 │
-├── experiments/                # Evaluation
-│   ├── exp_b1_multi_encoder.py # EmCom-Diffusion score: CLIP-img, DINOv2, SigLIP
-│   ├── evaluate.py             # CLIP-text, FID
-│   ├── exp_a1_generate_multiseed.py  # Multi-seed generation (Table 3)
-│   ├── exp_a1_eval_diversity.py      # Multi-seed diversity analysis (Table 3)
-│   ├── exp_a2_distribution_metrics.py # Vendi, Recall
-│   ├── cache_dino_gen.py       # Cache DINOv2 embeddings of generated images
-│   ├── run_A_triplet.py        # Table 4: Translation vs EmCom-Diffusion
-│   ├── run_B_step2_triplet.py  # Table 5: TopSim / CBM vs EmCom-Diffusion
+├── experiments/                    # Evaluation scripts
+│   ├── eval_similarity.py          # EmCom-Diffusion score: CLIP-img, DINOv2, SigLIP
+│   ├── evaluate.py                 # CLIP-text similarity, FID
+│   ├── generate_multiseed.py       # Generate N seeds per token sequence (Table 3)
+│   ├── eval_multiseed_diversity.py # Intra/inter-token distance, distance to GT (Table 3)
+│   ├── eval_distribution.py        # Vendi score, Recall
+│   ├── cache_embeddings.py         # Cache DINOv2 embeddings of generated images
+│   ├── compare_translation.py      # Table 4: Translation vs EmCom-Diffusion
+│   ├── compare_topsim_cbm.py       # Table 5: TopSim / CBM vs EmCom-Diffusion
 │   ├── run_distractor_sensitivity.py # Table 6: R@1 distractor sensitivity
-│   ├── eval_r1_val5k.py        # Corpus-level R@1
-│   └── bootstrap_paper.py      # Bootstrap 95% CI for Tables 4–6
+│   ├── eval_r1.py                  # Corpus-level R@1
+│   └── compute_ci.py               # Bootstrap 95% CI for Tables 4–6
 │
-└── translation/                # EC→NL translation baseline (Yao et al. 2022)
+└── translation/                    # EC→NL translation baseline (Yao et al. 2022)
     ├── vocab.py / dataset.py / model.py
     ├── train.py
     └── translate.py
@@ -144,38 +147,38 @@ emcom-diffusion/
 
 ## Referential Game
 
-This section is only needed if you want to train your own EC model.  
-If you already have an EC corpus, skip to [Validate EmCom-Diffusion](#validate-emcom-diffusion).
+This section is only needed if you want to train your own EC model from scratch.  
+If you already have an EC corpus, skip directly to [Validate EmCom-Diffusion](#validate-emcom-diffusion).
 
-**Prepare an image-list JSON** — a list of `{"image": "/path/to/img.jpg"}` entries for all training images:
+**Prepare an image-list JSON** — a list of `{"image": "/path/to/img.jpg"}` entries for training images.
 
 ```bash
-# Train (4-GPU)
 export COCO_ROOT=/path/to/coco2017
 
+# Train (4-GPU)
 torchrun --nproc_per_node=4 -m ec_game.train \
     --config   ec_game/configs/config_referential.yaml \
     --img_list data/coco_image_list.json \
     --output_dir outputs/ec_game
 
-# Extract EC corpus from the trained checkpoint (e.g. epoch 29)
+# Extract EC corpus from the final checkpoint
 python -m ec_game.extract_corpus \
     --ckpt    outputs/ec_game/referential_YYYYMMDD/checkpoint_29.pth \
     --ec_json data/ec_captions.json \
     --output  outputs/ec_corpus.json
 ```
 
-`ec_captions.json` provides the train/val image paths (same format as the corpus output, without `ec_tokens`).
+`ec_captions.json` maps each image to its train/val split and file path (same format as the corpus output, without the `ec_tokens` field).
 
 **Model architecture:**
 
 | | Speaker | Receiver |
 |---|---|---|
 | Visual encoder | Frozen DINOv2 ViT-B/14 | Same frozen DINOv2 |
-| Core module | K=8 learnable queries → cross-attention to patch tokens | 6-layer BERT (hidden=768, 6 heads) |
-| Output | Gumbel-softmax → K tokens from V=256 vocab | L2-normalised 256-dim projection |
+| Core module | K=8 learnable queries → cross-attention to DINOv2 patch tokens | 6-layer BERT (hidden=768, 6 heads) |
+| Output | Straight-through Gumbel-softmax → K tokens, V=256 vocab | L2-normalised 256-dim projection |
 
-Training: AdamW, lr=3×10⁻⁴, weight decay=0.05, batch=128 (128-way game), warmup=1,000 steps, 30 epochs, τ: 1.0→0.5 (linear over 30k steps).
+Training: AdamW, lr=3×10⁻⁴, weight decay=0.05, batch=128 (128-way game), warmup=1,000 steps, 30 epochs, temperature τ: 1.0→0.5 linear over 30k steps.
 
 ---
 
@@ -185,76 +188,93 @@ Reproduces Table 2 (validity) and Table 3 (multi-seed analysis).
 
 ### Fine-tune Stable Diffusion
 
-```bash
-# Setting B: EC embedding + U-Net LoRA  (used for main results)
-accelerate launch -m diffusion.train --config configs/setting_b.yaml
+SD v1.5 is fine-tuned in three settings depending on how many parameters are updated:
 
-# SD-NL baseline: NL captions + U-Net LoRA
-accelerate launch diffusion/train_nl.py --config configs/setting_nl.yaml
+| Config | What is trained | Notes |
+|---|---|---|
+| `diffusion_ec_embed.yaml` | EC token embedding only | U-Net frozen |
+| `diffusion_ec_lora.yaml` | EC token embedding + U-Net LoRA | **Recommended** |
+| `diffusion_ec_full.yaml` | EC token embedding + CLIP top-4 layers + U-Net LoRA | Heaviest |
+
+```bash
+# EC-conditioned model
+accelerate launch -m diffusion.train --config configs/diffusion_ec_lora.yaml
+
+# SD-NL baseline: same budget, NL captions instead of EC tokens
+accelerate launch diffusion/train_nl.py --config configs/diffusion_nl_lora.yaml
 ```
 
-### Generate images (5,000 val images × 4 conditions)
+### Generate images (5,000 val images × conditions)
 
 ```bash
+EC_JSON=outputs/ec_corpus.json
+EC_CKPT=checkpoints/emcom_model/step_010000
+NL_CKPT=checkpoints/sd_nl_model/step_010000
+
 for TYPE in ec random fixed; do
   python -m diffusion.inference \
-    --ckpts  checkpoints/pilot_B/step_010000 \
-    --labels B --n_samples 5000 \
-    --input_type $TYPE \
-    --ec_json outputs/ec_corpus.json \
-    --out_img_dir outputs/generated_images
+    --ckpts $EC_CKPT --labels emcom_${TYPE} \
+    --n_samples 5000 --input_type $TYPE \
+    --ec_json $EC_JSON --out_img_dir outputs/generated_images
 done
 
 # SD-NL baseline
 python -m diffusion.inference \
-    --ckpts  checkpoints/pilot_B/step_010000 \
-    --labels B --n_samples 5000 --nl_only \
-    --nl_ft_ckpt checkpoints/pilot_NL/step_010000 \
-    --ec_json outputs/ec_corpus.json \
-    --out_img_dir outputs/generated_images
+    --ckpts $EC_CKPT --labels sd_nl \
+    --n_samples 5000 --nl_only \
+    --nl_ft_ckpt $NL_CKPT \
+    --ec_json $EC_JSON --out_img_dir outputs/generated_images
 ```
 
-Generation uses DDIM (50 steps, guidance=7.5), evaluated on a fixed 5,000-image subset with seed 42.
+Generation: DDIM 50 steps, classifier-free guidance 7.5, seed 42.
 
 ### Compute metrics (Table 2)
 
 ```bash
+EC_JSON=outputs/ec_corpus.json
+GEN=outputs/generated_images
+
 # CLIP-img (ViT-B/32), DINOv2, SigLIP
-python experiments/exp_b1_multi_encoder.py \
-    --ec_json  outputs/ec_corpus.json \
-    --gen_dir  outputs/generated_images \
-    --out_csv  outputs/b1_multi_encoder.csv \
+python experiments/eval_similarity.py \
+    --ec_json $EC_JSON \
+    --gen_dir $GEN \
+    --conditions emcom_ec emcom_random emcom_fixed sd_nl \
+    --out_csv outputs/similarity_scores.csv \
     --n_samples 5000
 
 # CLIP-text, FID
 python experiments/evaluate.py \
-    --ec_json    outputs/ec_corpus.json \
-    --gen_dirs   outputs/generated_images/B \
-    --rand_dirs  outputs/generated_images/B_random \
-    --fixed_dirs outputs/generated_images/B_fixed \
-    --nl_ft_dir  outputs/generated_images/NL_ft \
-    --labels B --n_samples 5000 \
-    --out_csv outputs/pilot_metrics.csv
+    --ec_json    $EC_JSON \
+    --gen_dirs   $GEN/emcom_ec \
+    --rand_dirs  $GEN/emcom_random \
+    --fixed_dirs $GEN/emcom_fixed \
+    --nl_ft_dir  $GEN/sd_nl \
+    --labels emcom --n_samples 5000 \
+    --out_csv outputs/clip_fid_scores.csv
 
-# Vendi, Recall
-python experiments/exp_a2_distribution_metrics.py \
-    --ec_json  outputs/ec_corpus.json \
-    --gen_dir  outputs/generated_images \
-    --out_csv  outputs/distribution_metrics.csv
+# Vendi score, Recall
+python experiments/eval_distribution.py \
+    --ec_json  $EC_JSON \
+    --gen_dir  $GEN \
+    --out_csv  outputs/distribution_scores.csv
 ```
 
 ### Multi-seed analysis (Table 3)
 
+Verifies that EmCom-Diffusion measures input-specific signal rather than sampling noise.
+
 ```bash
-python experiments/exp_a1_generate_multiseed.py \
+# Generate 8 images per token sequence for 500 samples
+python experiments/generate_multiseed.py \
     --ec_json   outputs/ec_corpus.json \
-    --ec_ckpt   checkpoints/pilot_B/step_010000 \
+    --ec_ckpt   checkpoints/emcom_model/step_010000 \
     --out_dir   outputs/multiseed \
     --n_samples 500 --n_seeds 8
 
-python experiments/exp_a1_eval_diversity.py \
+# Compute intra-token distance, inter-token distance, distance to GT
+python experiments/eval_multiseed_diversity.py \
     --multiseed_dir outputs/multiseed \
-    --out_csv       outputs/a1_diversity.csv
+    --out_csv       outputs/multiseed_diversity.csv
 ```
 
 ---
@@ -263,65 +283,72 @@ python experiments/exp_a1_eval_diversity.py \
 
 Reproduces Tables 4–6 (comparison against Translation, TopSim, CBM, R@1).
 
+All scripts in this section read intermediate embedding caches generated by the steps above.  
+Set `PROJ_DIR` to the repository root before running:
+
+```bash
+export PROJ_DIR=/path/to/emcom-diffusion
+```
+
 ### Translation baseline (Table 4)
 
 ```bash
-# Train EC→NL translator
+# Train EC→NL seq2seq translator (Transformer, 3 enc / 6 dec layers, d=256)
 python -m translation.train \
     --ec_corpus outputs/ec_corpus.json \
     --vocab     outputs/translation/vocab.json \
     --ckpt_dir  outputs/translation/checkpoints \
     --epochs 10
 
-# Translate val set and cache CLIP ViT-L/14 text embeddings
+# Translate val set; cache CLIP ViT-L/14 text embeddings of translations
 python -m translation.translate \
     --ec_corpus  outputs/ec_corpus.json \
     --ckpt       outputs/translation/checkpoints/best.pt \
     --vocab      outputs/translation/vocab.json \
     --output     outputs/translation/translations_val5k.json \
-    --clip_cache outputs/cache_pred_clip_text_vitl14.npy
+    --clip_cache outputs/clip_translation_embeddings.npy
 ```
 
-### Cache embeddings for comparison experiments
+### Cache embeddings for triplet experiments
 
 ```bash
-# DINOv2 embeddings of generated images (EmCom-Diffusion score)
-python experiments/cache_dino_gen.py \
-    --gen_dir outputs/generated_images/B \
+# DINOv2 ViT-B/14 embeddings of EC-generated images (EmCom-Diffusion score)
+python experiments/cache_embeddings.py \
+    --gen_dir outputs/generated_images/emcom_ec \
     --ec_json outputs/ec_corpus.json \
-    --output  outputs/cache_dino_vitb14_gen.npy
+    --output  outputs/emcom_dino_embeddings.npy
 ```
 
-The following GT caches must also exist in `outputs/experiments_v2/`  
-(generated by earlier evaluation steps):
-- `cache_gt_clip_vitl14.npy` — GT image embeddings (CLIP ViT-L/14)
-- `cache_dino_vitb14_gt.npy` — GT image embeddings (DINOv2 ViT-B/14)
-- `cache_gt_clip_captions_vitl14.npy` — GT caption embeddings (CLIP ViT-L/14)
+The following GT embedding caches are also required (generated automatically by `eval_similarity.py` and `evaluate.py` above):
+
+| Cache file | Content | Encoder |
+|---|---|---|
+| `outputs/gt_clip_embeddings.npy` | GT val images | CLIP ViT-L/14 |
+| `outputs/gt_dino_embeddings.npy` | GT val images | DINOv2 ViT-B/14 |
+| `outputs/gt_caption_clip_embeddings.npy` | GT captions (5-caption average) | CLIP ViT-L/14 |
 
 ### Run comparison experiments
 
 ```bash
-export PROJ_DIR=/path/to/emcom-diffusion
+# Table 4: Translation vs EmCom-Diffusion (τ=0.7, varying caption-similarity ε)
+python experiments/compare_translation.py
 
-# Table 4: Translation vs EmCom-Diffusion
-python experiments/run_A_triplet.py
+# Table 5: TopSim / CBM vs EmCom-Diffusion (matched edit distance)
+python experiments/compare_topsim_cbm.py
 
-# Table 5: TopSim / CBM vs EmCom-Diffusion
-python experiments/run_B_step2_triplet.py
-
-# Table 6: R@1 distractor sensitivity
+# Table 6: R@1 under random vs hard-negative distractors
 python experiments/run_distractor_sensitivity.py \
     --ckpt       outputs/ec_game/referential_YYYYMMDD/checkpoint_29.pth \
     --corpus     outputs/ec_corpus.json \
-    --cache_dir  outputs/experiments_v2 \
-    --output_dir outputs/experiments_v3
+    --cache_dir  outputs \
+    --output_dir outputs/distractor_results
 ```
 
-### Bootstrap 95% CI (final values for Tables 4–6)
+### Bootstrap 95% CI (Tables 4–6 final values)
 
 ```bash
-python experiments/bootstrap_paper.py
-# Results written to $PROJ_DIR/experiments_v3/outputs/
+python experiments/compute_ci.py
+# CSV results written to $PROJ_DIR/experiments_v3/outputs/
 ```
 
 ---
