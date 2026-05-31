@@ -1,0 +1,49 @@
+# Referential Game: V=256, K=8  (paper default setting)
+game: 'referential'
+
+# Path to the image list JSON  (list of {"image": "/path/to/img.jpg"} entries)
+# Override via --config or pass directly to train.py --img_list
+train_file: []   # set via train.py --img_list
+
+image_size: 224
+batch_size: 128
+num_workers: 8
+
+# Visual encoder
+vit: 'base'
+vit_grad_ckpt: false
+vit_ckpt_layer: 0
+
+# Message
+num_slots: 8
+vocab_size: 256
+
+# Gumbel-softmax annealing: 1.0 → 0.5 over 30k steps
+tau_init: 1.0
+tau_min:  0.5
+tau_anneal_steps: 30000
+
+# Entropy regularisation (prevents vocabulary collapse)
+lambda_ent: 0.1
+
+# Contrastive temperature (learnable)
+temp: 0.07
+
+# Loss weights (referential: contrastive only)
+loss_weight_ref:   1.0
+loss_weight_recon: 0.0
+
+# Receiver dimensions
+embed_dim: 256
+num_attention_heads: 6
+num_hidden_layers:   6
+
+# Optimizer (AdamW)
+weight_decay: 0.05
+init_lr:      3.0e-4
+min_lr:       1.0e-6
+warmup_lr:    1.0e-6
+warmup_steps: 1000
+
+max_epoch: 30
+save_checkpoint_interval: 5
