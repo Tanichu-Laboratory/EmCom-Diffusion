@@ -124,6 +124,12 @@ emcom-diffusion/
 │   ├── data.py
 │   └── utils.py
 │
+├── configs/                        # SD fine-tuning configs (base.yaml + one file per setting)
+├── accelerate_configs/             # accelerate launch configs (1–4 GPUs)
+├── data/eval_image_ids.json        # The 5,000 evaluation image IDs
+├── results/control_trainable_modules.csv  # Control experiment for Appendix B
+├── run_exp1_seeds.sh / run_exp1_eval.sh   # Evaluator seed variance (Table 2, EL row)
+│
 ├── experiments/                    # Evaluation scripts
 │   ├── eval_similarity.py          # EmCom-Diffusion score: CLIP-img, DINOv2, SigLIP
 │   ├── evaluate.py                 # CLIP-text similarity, FID
@@ -135,7 +141,10 @@ emcom-diffusion/
 │   ├── compare_topsim_cbm.py       # Table 5: TopSim / CBM vs EmCom-Diffusion
 │   ├── run_distractor_sensitivity.py # Table 6: R@1 distractor sensitivity
 │   ├── eval_r1.py                  # Corpus-level R@1
-│   └── compute_ci.py               # Bootstrap 95% CI for Tables 4–6
+│   ├── compute_ci.py               # Bootstrap 95% CI for Tables 4–6 (also prints tie rates)
+│   ├── export_eval_ids.py          # Writes data/eval_image_ids.json
+│   ├── camera_ready_cpu_checks.py  # Percentile of τ = 0.7 among pairwise image similarities
+│   └── triplets/                   # Original cache/triplet scripts behind Tables 4–6 (paths of our machine hard-coded)
 │
 └── translation/                    # EC→NL translation baseline (Yao et al. 2022)
     ├── vocab.py / dataset.py / model.py
@@ -204,6 +213,29 @@ accelerate launch -m diffusion.train --config configs/diffusion_ec_lora.yaml
 accelerate launch diffusion/train_nl.py --config configs/diffusion_nl_lora.yaml
 ```
 
+**Setting used in the paper.** The EL, Random and Fixed rows of Table 2 use `diffusion_ec_embed.yaml` (only the emergent-token embedding is trained; U-Net and CLIP Transformer frozen). SD-NL uses `diffusion_nl_lora.yaml` (U-Net LoRA, rank 16).
+
+#### Control: trainable modules (Appendix B)
+
+EL and SD-NL train different modules. To check that this asymmetry does not drive the ordering in Table 2, the EL pipeline was also run with the same U-Net LoRA as SD-NL (`diffusion_ec_lora.yaml`) and with a superset of it (`diffusion_ec_full.yaml`). Every row uses the same budget (10,000 steps, effective batch size 64, lr 1e-4) and n = 5,000 evaluation images; each row is a single run, and brackets are 95% bootstrap CIs.
+
+| Config | Trained modules | Input | CLIP-img | DINOv2 |
+|---|---|---|---|---|
+| `diffusion_ec_embed` | EC embedding | EL | 0.638 | 0.247 [0.240, 0.253] |
+| | | Random | 0.485 | 0.022 |
+| | | Fixed | 0.492 | 0.031 |
+| `diffusion_ec_lora` | EC embedding + U-Net LoRA r16 | EL | 0.604 | 0.243 [0.237, 0.249] |
+| | | Random | 0.479 | 0.026 |
+| | | Fixed | 0.473 | 0.026 |
+| `diffusion_ec_full` | EC embedding + U-Net LoRA r16 + CLIP top-4 layers | EL | 0.652 | 0.333 [0.326, 0.339] |
+| | | Random | 0.476 | 0.028 |
+| | | Fixed | 0.473 | 0.034 |
+| `diffusion_nl_lora` (SD-NL) | U-Net LoRA r16 | captions | 0.726 | 0.438 [0.432, 0.443] |
+
+The ordering Random/Fixed < EL < SD-NL holds in all three EL settings. Adding the U-Net LoRA does not raise the EL score, the superset setting still stays below SD-NL, and the Random/Fixed scores stay near their floor in every setting (DINOv2 ≤ 0.034). All metrics for these runs are in `results/control_trainable_modules.csv`.
+
+These runs were generated before per-sample latent seeding (`--latent_seed`) was added, so the `diffusion_ec_embed` EL value here (one run) differs slightly from the four-seed mean reported in Table 2.
+
 ### Generate images (5,000 val images × conditions)
 
 ```bash
@@ -226,7 +258,10 @@ python -m diffusion.inference \
     --ec_json $EC_JSON --out_img_dir outputs/generated_images
 ```
 
-Generation: DDIM 50 steps, classifier-free guidance 7.5, seed 42.
+Generation: DDIM 50 steps, classifier-free guidance 7.5, seed 42.  
+`--seed` selects the evaluation subset and the random-token baseline; `--latent_seed` (defaults to `--seed`) seeds the initial latents per sample, so the image for a given index does not depend on batch size.
+
+The 5,000 evaluation image IDs are listed in `data/eval_image_ids.json`, in both corpus order and generation order (written by `experiments/export_eval_ids.py`).
 
 ### Compute metrics (Table 2)
 
@@ -259,17 +294,28 @@ python experiments/eval_distribution.py \
     --out_csv  outputs/distribution_scores.csv
 ```
 
+### Evaluator seed variance (Table 2, EL row)
+
+The EL row of Table 2 is the mean ± std over four fine-tuning seeds of the evaluator (42, 0, 1, 2), all generated with the same latents.
+
+```bash
+bash run_exp1_seeds.sh   # trains seeds 0/1/2 (configs/diffusion_ec_embed_seed{0,1,2}.yaml); seed 42 is diffusion_ec_embed.yaml
+bash run_exp1_eval.sh    # generates all four with --seed 42 --latent_seed 42 and scores them
+```
+
+Both scripts set the paths of our machine at the top (`PROJECT_DIR`, `REPO`, `COCO_ROOT`); edit them before running.
+
 ### Multi-seed analysis (Table 3)
 
 Verifies that EmCom-Diffusion measures input-specific signal rather than sampling noise.
 
 ```bash
-# Generate 8 images per token sequence for 500 samples
+# Generate 8 images per token sequence for 1,000 samples
 python experiments/generate_multiseed.py \
     --ec_json   outputs/ec_corpus.json \
     --ec_ckpt   checkpoints/emcom_model/step_010000 \
     --out_dir   outputs/multiseed \
-    --n_samples 500 --n_seeds 8
+    --n_samples 1000 --n_seeds 8
 
 # Compute intra-token distance, inter-token distance, distance to GT
 python experiments/eval_multiseed_diversity.py \
