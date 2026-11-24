@@ -1,0 +1,21 @@
+# Accelerate config for 2-GPU DDP training on RTX 6000 Ada (50.9 GB × 2)
+# Usage:
+#   accelerate launch --config_file accelerate_configs/2gpu_ddp.yaml \
+#     src/pilot_ec2img/train.py --config configs/setting_b.yaml
+
+compute_environment: LOCAL_MACHINE
+distributed_type: MULTI_GPU
+num_processes: 2
+num_machines: 1
+machine_rank: 0
+main_process_ip: null
+main_process_port: 29500
+
+gpu_ids: "0,1"
+mixed_precision: fp16
+
+# DDP specifics
+downcast_bf16: "no"
+dynamo_backend: "no"
+
+# gradient_accumulation_steps is set per-run in the training script

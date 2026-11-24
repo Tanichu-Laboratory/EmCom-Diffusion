@@ -178,10 +178,25 @@ def main():
     # Generated images were produced with random.seed(42) + random.sample(val_all, 5000),
     # giving a fixed ordering stored as 0000_imgid*.png, 0001_imgid*.png, ...
     # Reference images must be loaded in the SAME order so pairs match.
-    import random as stdlib_random
-    stdlib_random.seed(args.seed)
-    gen_order = stdlib_random.sample(val_all, len(val_all))
-    val_entries = gen_order[:n]  # first n entries match generated images 0000..{n-1}
+    # 2026-11-10 (omoto): the prefix of random.sample(val_all, len(val_all)) is NOT the same as random.sample(val_all, n)
+    # for n below Python's set/pool switch (checked: 845/1000 ids shared, positions diverge), so pairs were wrong and every
+    # condition scored near chance. Pair by the image id written in the generated file names instead (NNNN_imgid<ID>.png),
+    # taken from the first condition directory that exists; the order is the same for every condition (same seed).
+    import re
+    by_id = {e["image_id"]: e for e in val_all}
+    val_entries = None
+    for cond in args.conditions:
+        d = GEN_DIR / cond
+        if d.exists():
+            ids = [int(re.search(r"imgid(\d+)", p.name).group(1)) for p in sorted(d.glob("*.png"))[:n]]
+            val_entries = [by_id[i] for i in ids]
+            n = len(val_entries)
+            print(f"Paired {n} reference images by image id from {d}")
+            break
+    if val_entries is None:
+        import random as stdlib_random
+        stdlib_random.seed(args.seed)
+        val_entries = stdlib_random.sample(val_all, n)
 
     ref_images = [Image.open(e["image_path"]).convert("RGB") for e in val_entries]
 

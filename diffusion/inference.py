@@ -61,9 +61,25 @@ def load_checkpoint(ckpt_dir, base_model, device):
         vocab_size=cfg["vocab_size"],
         pad_token_id=cfg["pad_token_id"],
         unfreeze_top_k_layers=cfg.get("unfreeze_top_k_layers", 0),
+        pretrained=cfg.get("text_encoder_pretrained", "openai/clip-vit-large-patch14"),
+        subfolder=cfg.get("text_encoder_subfolder"),
     )
     state = torch.load(str(ckpt_dir / "text_encoder_state.pt"), map_location="cpu")
-    text_enc.load_state_dict(state)
+    # Older transformers versions registered `position_ids` as a persistent
+    # buffer on CLIPTextEmbeddings; newer ones do not, so checkpoints saved back
+    # then fail to load with "Unexpected key(s)". The buffer is a constant
+    # arange(max_position_embeddings), so dropping it loses nothing.
+    stale = [k for k in state if k.endswith("embeddings.position_ids")]
+    for k in stale:
+        state.pop(k)
+    if stale:
+        print(f"[load] dropped stale buffer(s) from checkpoint: {stale}")
+    missing, unexpected = text_enc.load_state_dict(state, strict=False)
+    # Anything else missing/unexpected is a real mismatch -- fail loudly.
+    if missing or unexpected:
+        raise RuntimeError(
+            f"text encoder state_dict mismatch for {ckpt_dir}: "
+            f"missing={missing}, unexpected={unexpected}")
     text_enc = text_enc.to(device).eval()
 
     lora_dir = ckpt_dir / "unet_lora"
@@ -80,7 +96,8 @@ def load_checkpoint(ckpt_dir, base_model, device):
 
 @torch.no_grad()
 def generate_images(text_enc, unet, vae, scheduler, ec_tokens, attn_mask,
-                    pad_id, n_steps=50, guidance=7.5, device="cuda"):
+                    pad_id, n_steps=50, guidance=7.5, device="cuda",
+                    latent_seed=0, start_index=0):
     """Generate images with classifier-free guidance."""
     ids, mask = _pad_to_77(ec_tokens, attn_mask, pad_id)
     cond_hidden = text_enc(input_ids=ids, attention_mask=mask).last_hidden_state
@@ -94,7 +111,7 @@ def generate_images(text_enc, unet, vae, scheduler, ec_tokens, attn_mask,
     else:
         encoder_hidden = cond_hidden
 
-    latents = torch.randn(B, 4, 64, 64, device=device, dtype=cond_hidden.dtype)
+    latents = _make_latents(B, start_index, latent_seed, device, cond_hidden.dtype)
     scheduler.set_timesteps(n_steps)
 
     for t in scheduler.timesteps:
@@ -128,10 +145,26 @@ def path_to_b64(path: str, size: int = 160) -> str:
     return img_to_b64(Image.open(path).convert("RGB"), size)
 
 
+def _make_latents(bsz, start_index, latent_seed, device, dtype):
+    """Per-sample deterministic initial latents.
+
+    Each sample is seeded from its own global index, so the latents for a given
+    index are identical regardless of --batch_size or of where the batch
+    boundaries fall. Without this the latents come from the unseeded global RNG
+    and generation is not reproducible.
+    """
+    lat = torch.empty(bsz, 4, 64, 64, device=device, dtype=dtype)
+    g = torch.Generator(device=device)
+    for i in range(bsz):
+        g.manual_seed((latent_seed * 1_000_003 + start_index + i) % (2 ** 63 - 1))
+        lat[i] = torch.randn(4, 64, 64, generator=g, device=device, dtype=dtype)
+    return lat
+
+
 @torch.no_grad()
 def generate_nl_images(captions, base_model, vae, scheduler,
                        n_steps=50, guidance=7.5, batch_size=8, device="cuda",
-                       nl_ft_ckpt=None):
+                       nl_ft_ckpt=None, latent_seed=0):
     """Generate images from NL captions.
 
     nl_ft_ckpt: path to a pilot_NL checkpoint dir (unet_lora/ subdir expected).
@@ -163,7 +196,7 @@ def generate_nl_images(captions, base_model, vae, scheduler,
         else:
             encoder_hidden = cond_hidden
 
-        latents = torch.randn(bsz, 4, 64, 64, device=device, dtype=cond_hidden.dtype)
+        latents = _make_latents(bsz, start, latent_seed, device, cond_hidden.dtype)
         scheduler.set_timesteps(n_steps)
 
         for t in scheduler.timesteps:
@@ -246,7 +279,13 @@ def main():
     parser.add_argument("--labels",   nargs="+", default=None,
                         help="Label for each checkpoint (default: A B C ...)")
     parser.add_argument("--n_samples", type=int, default=100)
-    parser.add_argument("--seed",      type=int, default=42)
+    parser.add_argument("--seed",      type=int, default=42,
+                        help="Selects the evaluation subset and the random-token "
+                             "baseline. Keep at 42 to hold the eval set fixed.")
+    parser.add_argument("--latent_seed", type=int, default=None,
+                        help="Seed for the initial diffusion latents only. "
+                             "Defaults to --seed. Vary this (not --seed) to "
+                             "resample generation noise on a fixed eval set.")
     parser.add_argument("--n_steps",   type=int, default=50)
     parser.add_argument("--guidance",  type=float, default=7.5)
     parser.add_argument("--batch_size", type=int, default=8)
@@ -294,6 +333,11 @@ def main():
     vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae").to(device).eval()
     scheduler = DDIMScheduler.from_pretrained(base_model, subfolder="scheduler")
 
+    # Generation noise is seeded separately from --seed so that varying the
+    # sampling noise never changes which 5,000 val images are evaluated.
+    latent_seed = args.seed if args.latent_seed is None else args.latent_seed
+    print(f"[seed] eval-subset/token seed={args.seed}  latent seed={latent_seed}")
+
     # --nl_only: load existing EC images and just generate NL baseline
     if args.nl_only:
         generated = {}
@@ -312,7 +356,7 @@ def main():
             captions, base_model, vae, scheduler,
             n_steps=args.n_steps, guidance=args.guidance,
             batch_size=args.batch_size, device=str(device),
-            nl_ft_ckpt=args.nl_ft_ckpt,
+            nl_ft_ckpt=args.nl_ft_ckpt, latent_seed=latent_seed,
         )
         for idx, pil in enumerate(nl_images):
             pil.save(str(nl_out_dir / f"{idx:04d}_imgid{val_entries[idx]['image_id']}.png"))
@@ -365,6 +409,7 @@ def main():
                 text_enc, unet, vae, scheduler,
                 ids_t, mask_t, pad_id,
                 n_steps=args.n_steps, guidance=args.guidance, device=str(device),
+                latent_seed=latent_seed, start_index=start,
             )
             for i, img_t in enumerate(imgs_t):
                 pil = tensor_to_pil(img_t)
@@ -387,6 +432,7 @@ def main():
                 captions, base_model, vae, scheduler,
                 n_steps=args.n_steps, guidance=args.guidance,
                 batch_size=args.batch_size, device=str(device),
+                latent_seed=latent_seed,
             )
             for idx, pil in enumerate(nl_images):
                 pil.save(str(nl_out_dir / f"{idx:04d}_imgid{val_entries[idx]['image_id']}.png"))

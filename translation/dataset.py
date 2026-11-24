@@ -13,7 +13,7 @@ from collections import defaultdict
 import torch
 from torch.utils.data import Dataset
 
-from yao_translation.vocab import Vocab
+from translation.vocab import Vocab
 
 
 def load_coco_captions(ann_path: str) -> dict[int, list[str]]:

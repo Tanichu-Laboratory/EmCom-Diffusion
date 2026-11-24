@@ -35,6 +35,9 @@ from tqdm.auto import tqdm
 
 _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE))
+# load_nl_captions lives in diffusion/data.py, which is a sibling package of
+# experiments/. Without this the script dies at `from data import ...`.
+sys.path.insert(0, str(_HERE.parent / "diffusion"))
 
 PROJECT_DIR = Path(os.environ.get("PROJECT_DIR", str(_HERE.parent)))
 COCO_ROOT = Path(os.environ.get("COCO_ROOT", "data/coco2017"))

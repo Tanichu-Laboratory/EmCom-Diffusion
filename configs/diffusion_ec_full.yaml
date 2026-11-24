@@ -1,0 +1,9 @@
+# Setting C — maximum intervention
+# EC embedding + CLIP top-4 layers + U-Net LoRA.
+# "Does partial CLIP re-training further close the gap?"
+
+base_config: base.yaml
+
+run_name: pilot_C
+unfreeze_top_k_layers: 4   # top-4 CLIP Transformer layers + final LayerNorm
+unet_lora_rank: 16          # LoRA on U-Net cross-attention layers

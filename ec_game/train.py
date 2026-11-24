@@ -31,12 +31,18 @@ from torchvision import transforms
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 
-_emcom_spec = importlib.util.spec_from_file_location(
-    'simple_emcom_models', str(_HERE / 'models' / 'emcom.py')
-)
-_emcom_mod = importlib.util.module_from_spec(_emcom_spec)
-_emcom_spec.loader.exec_module(_emcom_mod)
-build_model = _emcom_mod.build_model
+
+def _load_build_model(model_file: str = 'emcom.py'):
+    """Load build_model from the specified model file under ec_game/models/."""
+    path = _HERE / 'models' / model_file
+    spec = importlib.util.spec_from_file_location('_emcom_mod', str(path))
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.build_model
+
+
+# Default: overridden in main() once config is read
+build_model = _load_build_model('emcom.py')
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -163,9 +169,14 @@ def train_one_epoch(model, loader, optimizer, device, epoch, config,
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main(args):
+    global build_model
     yaml = YAML(typ='rt')
     with open(args.config) as f:
         config = dict(yaml.load(f))
+
+    # Allow config to specify a custom model file (default: emcom.py)
+    model_file = config.get('model_file', 'emcom.py')
+    build_model = _load_build_model(model_file)
 
     config.setdefault('game', 'referential')
     config.setdefault('loss_weight_ref',   1.0)
@@ -247,10 +258,20 @@ def main(args):
         print(f"Trainable params: {n_params/1e6:.1f}M")
         print(f"Steps/epoch: {steps_per_epoch}  Total epochs: {max_epoch}")
 
+    start_epoch = 0
     global_step = 0
     save_interval = config.get('save_checkpoint_interval', 5)
 
-    for epoch in range(max_epoch):
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location='cpu')
+        start_epoch = ckpt['epoch'] + 1
+        model_state = ckpt['model']
+        (model.module if hasattr(model, 'module') else model).load_state_dict(model_state)
+        global_step = start_epoch * len(loader)
+        if is_main:
+            print(f"Resumed from {args.resume} (epoch {ckpt['epoch']} → start epoch {start_epoch}, global_step {global_step})")
+
+    for epoch in range(start_epoch, max_epoch):
         if world_size > 1:
             sampler.set_epoch(epoch)
 
@@ -286,5 +307,7 @@ if __name__ == '__main__':
                         help='Path to image-list JSON (overrides config train_file)')
     parser.add_argument('--output_dir', required=True,
                         help='Directory where checkpoints are saved')
+    parser.add_argument('--resume', default=None,
+                        help='Path to checkpoint to resume from')
     args = parser.parse_args()
     main(args)

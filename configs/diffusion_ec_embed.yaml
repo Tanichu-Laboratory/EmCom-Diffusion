@@ -1,0 +1,9 @@
+# Setting A — minimum intervention
+# EC embedding only; CLIP Transformer and U-Net both fully frozen.
+# "Can emergent language push meaning into the CLIP space with no U-Net adaptation?"
+
+base_config: base.yaml
+
+run_name: pilot_A
+unfreeze_top_k_layers: 0  # all CLIP Transformer layers frozen
+unet_lora_rank: 0          # U-Net completely frozen

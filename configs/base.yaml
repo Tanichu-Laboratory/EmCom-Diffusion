@@ -1,0 +1,47 @@
+# Shared settings for all pilot experiment variants (A / B / C).
+# Each variant YAML specifies only the values that differ from here.
+
+# model
+base_model: runwayml/stable-diffusion-v1-5
+vocab_size: 257        # 256 token IDs (0-255) + 1 pad token (blip_ref V=256)
+pad_token_id: 256
+
+# training schedule
+# 4 × RTX 6000 Ada (50.9 GB each): batch_size=16 per GPU, 4 GPUs → effective = 64
+image_size: 512
+batch_size: 16           # per-GPU; with 4 GPUs effective = 64
+grad_accumulation: 1     # no accumulation needed (50.9 GB VRAM per GPU)
+total_steps: 10000
+warmup_steps: 500
+weight_decay: 0.01
+max_grad_norm: 1.0
+mixed_precision: fp16
+gradient_checkpointing: false  # OFF: plenty of VRAM; saves compute
+num_workers: 8
+
+# learning rates
+lr_embedding: 1.0e-4
+lr_clip_unfrozen: 5.0e-5
+lr_lora: 1.0e-4
+
+# inference
+guidance_scale: 7.5
+
+# seed — same across A/B/C for fair comparison
+seed: 42
+
+# LoRA target modules (cross-attention)
+lora_target_modules:
+  - to_q
+  - to_k
+  - to_v
+  - to_out.0
+
+# checkpointing & logging
+val_interval: 500
+ckpt_interval: 2500
+ec_json: ec_corpus_blip_ref_ep29.json
+
+# logging (set log_with: wandb to enable)
+log_with: null
+wandb_project: pilot_ec2img

@@ -29,7 +29,22 @@ from torchvision import transforms
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 
-from ec_game.models.emcom import build_model
+import importlib.util as _ilu
+
+
+def _load_build_model(model_file: str = "emcom.py"):
+    """Load build_model from ec_game/models/<model_file>.
+
+    Which speaker class a checkpoint needs is recorded in its own config
+    (ckpt["config"]["model_file"]), so it must be resolved at load time rather
+    than imported statically. Hard-coding emcom.py made this script fail with a
+    state_dict mismatch on every GRU (emcom_causal.py) checkpoint.
+    """
+    path = Path(__file__).resolve().parent.parent / "ec_game" / "models" / model_file
+    spec = _ilu.spec_from_file_location("_emcom_mod", str(path))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.build_model
 
 IMG_SIZE  = 224
 TRANSFORM = transforms.Compose([
@@ -100,6 +115,7 @@ def main():
 
     ckpt   = torch.load(args.ckpt, map_location='cpu')
     config = ckpt['config']
+    build_model = _load_build_model(config.get('model_file', 'emcom.py'))
     model  = build_model(config).to(device).eval()
     model.load_state_dict(ckpt['model'])
     print(f"Loaded: V={config['vocab_size']} K={config['num_slots']}")

@@ -1,0 +1,9 @@
+# Setting B — medium intervention (recommended first run)
+# EC embedding + U-Net LoRA; CLIP Transformer frozen.
+# "Can the U-Net adapt to the statistical mismatch of emergent language?"
+
+base_config: base.yaml
+
+run_name: pilot_B
+unfreeze_top_k_layers: 0  # CLIP Transformer frozen
+unet_lora_rank: 16         # LoRA on U-Net cross-attention layers

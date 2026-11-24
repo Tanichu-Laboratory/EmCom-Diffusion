@@ -1,0 +1,29 @@
+# NL fair baseline: COCO-finetuned SD with natural-language captions.
+# Same training budget as Setting B (UNet LoRA rank=16, 10k steps).
+# CLIP text encoder frozen (already pre-trained on NL).
+
+base_model: runwayml/stable-diffusion-v1-5
+run_name: pilot_NL
+ec_json: ec_corpus_blip_ref_ep29.json   # used only for image paths / train-val split
+
+unet_lora_rank: 16
+total_steps: 10000
+batch_size: 16
+grad_accumulation: 1
+warmup_steps: 500
+lr_lora: 1.0e-4
+weight_decay: 0.01
+max_grad_norm: 1.0
+image_size: 512
+mixed_precision: fp16
+num_workers: 8
+seed: 42
+
+val_interval: 500
+ckpt_interval: 2500
+guidance_scale: 7.5
+lora_target_modules:
+  - to_q
+  - to_k
+  - to_v
+  - to_out.0

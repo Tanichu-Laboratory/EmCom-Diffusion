@@ -1,0 +1,15 @@
+# Experiment 1 (R1-2): evaluator-training seed variance.
+# Identical to diffusion_ec_embed.yaml (Setting A, the Table-2 configuration)
+# except for the optimization seed. Everything else -- corpus, trainable
+# modules, budget, batch size, LR, schedule -- is held fixed, so the spread
+# across these runs isolates evaluator-training variance.
+#
+# Generation must be run with --seed 42 (fixed eval subset) and
+# --latent_seed 42 (fixed sampling noise) for every one of these runs.
+
+base_config: base.yaml
+
+run_name: pilot_A_seed1
+unfreeze_top_k_layers: 0
+unet_lora_rank: 0
+seed: 1

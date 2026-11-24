@@ -177,6 +177,11 @@ def main():
         vocab_size=cfg["vocab_size"],
         pad_token_id=cfg["pad_token_id"],
         unfreeze_top_k_layers=cfg.get("unfreeze_top_k_layers", 0),
+        # Swapping base_model to another SD-1.x derivative needs no change here,
+        # since the whole family shares this frozen text encoder. Override these
+        # two keys only for a generator with a different encoder lineage.
+        pretrained=cfg.get("text_encoder_pretrained", "openai/clip-vit-large-patch14"),
+        subfolder=cfg.get("text_encoder_subfolder"),
     )
 
     # VAE: always frozen

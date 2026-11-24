@@ -168,26 +168,64 @@ img_cat_counts = defaultdict(lambda: defaultdict(int))
 for ann in inst_data["annotations"]:
     img_cat_counts[ann["image_id"]][ann["category_id"]] += 1
 image_ids = df_tok["image_id"].astype(int).tolist()
-dominant_cat = np.array([
-    cat2idx[max(img_cat_counts[iid], key=img_cat_counts[iid].get)]
-    if iid in img_cat_counts else -1
-    for iid in image_ids])
 VOCAB = 256
-cooccur = np.zeros((VOCAB, N_CATS), dtype=np.float32)
+
+# ── CBM per Appendix D ────────────────────────────────────────────────────────
+# Appendix D defines
+#   U_iv = 1[v in set(m_i)]   (distinct token types in the message)
+#   A_ic = 1[c in a_i]        (a_i = the SET of annotated concepts for image i)
+#   q_vc = sum_i U_iv A_ic ; best matching by Hungarian ; CBM = sum(matched q)/Q
+#   Q    = sum_i max(|set(m_i)|, |a_i|)
+#
+# CBM_LEGACY_DOMINANT_CAT restores the behaviour that produced the submitted
+# Table 5: only each image's single most frequent COCO category (|a_i| = 1) and
+# tokens counted with multiplicity. That discarded ~66% of the instance
+# annotation (mean |a_i| = 2.93 on COCO val) and did not match the formal
+# definition above. Keep it only to reproduce the submitted numbers.
+CBM_LEGACY_DOMINANT_CAT = False
+
+concept_sets = []
+for iid in image_ids:
+    cats = img_cat_counts.get(iid, {})
+    if not cats:
+        concept_sets.append([])
+    elif CBM_LEGACY_DOMINANT_CAT:
+        concept_sets.append([cat2idx[max(cats, key=cats.get)]])
+    else:
+        concept_sets.append([cat2idx[c] for c in cats])
+
+cooccur = np.zeros((VOCAB, N_CATS), dtype=np.float64)
 for i, seq in enumerate(seqs):
-    if dominant_cat[i] < 0: continue
-    for v in set(seq): cooccur[v, dominant_cat[i]] += 1.0
+    for c in concept_sets[i]:
+        for v in set(seq):
+            cooccur[v, c] += 1.0
+
 row_ind, col_ind = linear_sum_assignment(-cooccur)
 token_to_concept = dict(zip(row_ind.tolist(), col_ind.tolist()))
+
+# corpus-level CBM score (Appendix D, eq. cbm-Q) -- the quantity Carmeli et al.
+# actually define. The per-pair matrix below is our own operationalisation.
+Q_norm = float(sum(max(len(set(s)), len(a)) for s, a in zip(seqs, concept_sets)))
+cbm_corpus_score = float(cooccur[row_ind, col_ind].sum()) / Q_norm
+
+# per-image concept vector for the per-pair score used in Table 5.
+# set(seq) matches U's set semantics; counting multiplicity lets a repeated
+# token dominate the vector, which is what made the score near-binary.
 img_cbm = np.zeros((N, N_CATS), dtype=np.float32)
 for i, seq in enumerate(seqs):
-    for v in seq:
-        if v in token_to_concept: img_cbm[i, token_to_concept[v]] += 1.0
-    img_cbm[i] /= len(seq)
+    for v in set(seq):
+        if v in token_to_concept:
+            img_cbm[i, token_to_concept[v]] += 1.0
+n_zero_cbm = int((img_cbm.sum(axis=1) == 0).sum())
 norms = np.linalg.norm(img_cbm, axis=1, keepdims=True)
 img_cbm_norm = img_cbm / np.where(norms == 0, 1.0, norms)
 cbm_mat = img_cbm_norm @ img_cbm_norm.T
-print(f"  CBM matrix done. token_to_concept size={len(token_to_concept)}")
+print(f"  CBM matrix done. token_to_concept size={len(token_to_concept)}, "
+      f"legacy_dominant_cat={CBM_LEGACY_DOMINANT_CAT}")
+print(f"  mean |a_i| = {np.mean([len(a) for a in concept_sets]):.2f}, "
+      f"corpus-level CBM = {cbm_corpus_score:.4f}")
+print(f"  images with all-zero concept vector: {n_zero_cbm}/{N} "
+      f"({100*n_zero_cbm/N:.1f}%) -- these tie against every candidate")
 
 def accuracy_arr(a_idx, b_idx, c_idx, score_mat):
     sb = score_mat[a_idx, b_idx]
@@ -223,6 +261,16 @@ for d, n_paper in [(1, None), (2, None), (3, None)]:
     per_ts = accuracy_arr(Ah, Bh, Ch, neg_edit)
     per_cb = accuracy_arr(Ah, Bh, Ch, cbm_mat)
 
+    # Tie rate: a tie is scored 0.5, so a condition with a high tie rate reports
+    # forced coin-flips rather than wrong judgements. TopSim is tied by
+    # construction here (matched edit distance); CBM ties because its per-pair
+    # concept vectors are near-one-hot on this corpus.
+    tie_em = float((emcom_mat[Ah, Bh] == emcom_mat[Ah, Ch]).mean())
+    tie_ts = float((neg_edit[Ah, Bh] == neg_edit[Ah, Ch]).mean())
+    tie_cb = float((cbm_mat[Ah, Bh] == cbm_mat[Ah, Ch]).mean())
+    print(f"    tie rate  EmCom {tie_em*100:.1f}%  TopSim {tie_ts*100:.1f}%  "
+          f"CBM {tie_cb*100:.1f}%")
+
     rng_b5 = np.random.default_rng(RNG_SEED + d)
     em_m, em_lo, em_hi = boot_mean_ci(per_em, rng_b5)
     ts_m, ts_lo, ts_hi = boot_mean_ci(per_ts, rng_b5)
@@ -240,7 +288,8 @@ for d, n_paper in [(1, None), (2, None), (3, None)]:
     t5_rows.append({"ed": d, "N": len(Ah),
                     "emcom_mean": em_m, "emcom_lo": em_lo, "emcom_hi": em_hi,
                     "topsim_mean": ts_m, "topsim_lo": ts_lo, "topsim_hi": ts_hi,
-                    "cbm_mean": cb_m, "cbm_lo": cb_lo, "cbm_hi": cb_hi})
+                    "cbm_mean": cb_m, "cbm_lo": cb_lo, "cbm_hi": cb_hi,
+                    "emcom_tie": tie_em, "topsim_tie": tie_ts, "cbm_tie": tie_cb})
 
 pd.DataFrame(t5_rows).to_csv(V3 / "paper_bootstrap_t5.csv", index=False)
 

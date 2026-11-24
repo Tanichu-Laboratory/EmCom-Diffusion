@@ -33,7 +33,16 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from ec_game.models.emcom import build_model
+import importlib.util as _ilu
+
+def _load_build_model(model_file: str = 'emcom.py'):
+    """Load build_model from ec_game/models/<model_file>."""
+    _here = Path(__file__).resolve().parent
+    path  = _here / 'models' / model_file
+    spec  = _ilu.spec_from_file_location('_emcom_mod', str(path))
+    mod   = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.build_model
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -95,11 +104,13 @@ def main():
 
     device = torch.device(args.device)
 
-    # Load checkpoint
-    ckpt = torch.load(args.ckpt, map_location='cpu')
+    # Load checkpoint — model_file is stored in config (falls back to emcom.py, the paper's speaker)
+    ckpt   = torch.load(args.ckpt, map_location='cpu')
     config = ckpt['config']
-    print(f"[load] game={config['game']}  V={config['vocab_size']}  K={config['num_slots']}")
+    model_file = config.get('model_file', 'emcom.py')
+    print(f"[load] game={config['game']}  V={config['vocab_size']}  K={config['num_slots']}  model={model_file}")
 
+    build_model = _load_build_model(model_file)
     model = build_model(config).to(device)
     model.load_state_dict(ckpt['model'])
     model.eval()

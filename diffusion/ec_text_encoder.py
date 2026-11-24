@@ -21,6 +21,7 @@ def build_ec_text_encoder(
     pad_token_id: int,
     unfreeze_top_k_layers: int = 0,
     pretrained: str = "openai/clip-vit-large-patch14",
+    subfolder: str | None = None,
 ) -> CLIPTextModel:
     """
     Args:
@@ -30,16 +31,23 @@ def build_ec_text_encoder(
             0  → all layers frozen   (settings A & B)
             4  → top 4 layers + final LayerNorm unfrozen (setting C)
         pretrained:            HuggingFace model ID for the base CLIP text encoder
+        subfolder:             subfolder inside `pretrained` holding the encoder.
+            Pass subfolder="text_encoder" with a diffusion pipeline repo id to
+            take the encoder that pipeline was actually trained against. Leave
+            None for a standalone CLIP repo. The frozen Transformer weights must
+            match what the U-Net expects, so these two must come from the same
+            lineage; every SD-1.x derivative shares openai/clip-vit-large-patch14.
 
     Returns:
         CLIPTextModel with custom token embedding and partial freezing applied.
     """
-    clip = CLIPTextModel.from_pretrained(pretrained)
+    kwargs = {"subfolder": subfolder} if subfolder else {}
+    clip = CLIPTextModel.from_pretrained(pretrained, **kwargs)
 
     orig_embed = clip.text_model.embeddings.token_embedding
     new_embed = nn.Embedding(
         num_embeddings=vocab_size,
-        embedding_dim=clip.config.hidden_size,  # 768
+        embedding_dim=clip.config.hidden_size,  # 768 for SD 1.x
         padding_idx=pad_token_id,
     )
     with torch.no_grad():
