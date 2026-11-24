@@ -1,0 +1,14 @@
+# Large generated artefacts (regenerate with the commands in README.md)
+outputs/
+checkpoints/
+*__pycache__/
+*.pyc
+
+# Corpora and caches are large and are regenerated, not committed.
+# Everything else under *.json IS needed to run the code, so do not
+# blanket-ignore JSON: ec_game/data_*.json are the referential-game image
+# lists and ec_game/configs/*.json is the BERT config.
+outputs/*.json
+*.npy
+*.pth
+*.safetensors
