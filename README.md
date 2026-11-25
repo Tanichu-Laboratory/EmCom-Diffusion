@@ -3,6 +3,8 @@
 Haruumi Omoto and Tadahiro Taniguchi  
 Graduate School of Informatics, Kyoto University
 
+**Paper:** [arXiv:2607.03752](https://arxiv.org/abs/2607.03752)
+
 > **Visual reflection** is the extent to which emergent messages preserve information about their source images that can be recovered without appeal to the speaker–listener pair that produced them. EmCom-Diffusion measures this property by fine-tuning a text-to-image diffusion model on (image, emergent-message) pairs and quantifying the perceptual similarity between the generated and original image.
 
 ---
